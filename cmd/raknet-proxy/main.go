@@ -7,6 +7,7 @@ import (
 
 	log "github.com/sirupsen/logrus"
 
+	"github.com/percygrunwald/raknet-proxy/lib/proxy"
 	"github.com/urfave/cli/v2"
 )
 
@@ -16,7 +17,7 @@ func main() {
 		Usage:   "RakNet proxy",
 		Flags:   cliFlags,
 		Action:  runApp,
-		Version: "v0.1.5",
+		Version: "v0.0.1",
 	}
 
 	if err := app.Run(os.Args); err != nil {
@@ -30,6 +31,13 @@ func runApp(cCtx *cli.Context) error {
 	log.SetFormatter(logFormat.formatter)
 	log.SetOutput(os.Stdout)
 	log.SetLevel(logLevel.level)
-	log.Info("Started app...")
-	return nil
+
+	proxy := &proxy.Proxy{
+		ServerHostname: flagValueServerHostname,
+		ServerPort:     flagValueServerPort,
+		ProxyHostname:  flagValueProxyHostname,
+		ListenPort:     flagValueListenPort,
+	}
+
+	return proxy.Run()
 }

@@ -29,9 +29,10 @@ RUN export ASDF_DIR=~/.asdf \
   && if [ ! -d "${ASDF_DIR}/bin" ]; then \
       git clone https://github.com/asdf-vm/asdf.git "${ASDF_DIR}" --branch v0.13.1; \
     fi \
-  && ./install_deps.sh \
   && echo '. "$HOME/.asdf/asdf.sh"' >> ~/.bashrc \
   && echo '. "$HOME/.asdf/completions/asdf.bash"' >> ~/.bashrc \
-  && rm -rf /var/lib/apt/lists/*
+  && git config --global --add safe.directory '*'
+RUN export ASDF_DIR=~/.asdf && ./install_deps.sh
+RUN rm -rf /var/lib/apt/lists/*
 
 CMD ["bash"]

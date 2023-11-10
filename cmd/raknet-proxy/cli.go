@@ -26,6 +26,10 @@ func (l logFormat) String() string {
 	return l.text
 }
 
+const (
+	portMax int = 65535
+)
+
 var (
 	logLevelTrace = logLevel{text: "trace", level: log.TraceLevel}
 	logLevelDebug = logLevel{text: "debug", level: log.DebugLevel}
@@ -45,17 +49,21 @@ var (
 )
 
 var (
-	flagValueLogLevel  string
-	flagValueLogFormat string
+	flagValueLogLevel       string
+	flagValueLogFormat      string
+	flagValueServerHostname string
+	flagValueServerPort     int
+	flagValueProxyHostname  string
+	flagValueListenPort     int
 )
 
 var cliFlags = []cli.Flag{
-	&cli.StringFlag{
-		Name:        "log-level",
-		Usage:       fmt.Sprintf("Set the log level. Valid options: %v", logLevels),
-		Value:       defaultLogLevel.text,
-		Action:      validateLogLevel,
-		Destination: &flagValueLogLevel,
+	&cli.IntFlag{
+		Name:        "listen-port",
+		Usage:       "Port on which to listen for RakNet packets from clients",
+		Required:    true,
+		Action:      validatePort,
+		Destination: &flagValueListenPort,
 	},
 	&cli.StringFlag{
 		Name:        "log-format",
@@ -64,6 +72,39 @@ var cliFlags = []cli.Flag{
 		Action:      validateLogFormat,
 		Destination: &flagValueLogFormat,
 	},
+	&cli.StringFlag{
+		Name:        "log-level",
+		Usage:       fmt.Sprintf("Set the log level. Valid options: %v", logLevels),
+		Value:       defaultLogLevel.text,
+		Action:      validateLogLevel,
+		Destination: &flagValueLogLevel,
+	},
+	&cli.StringFlag{
+		Name:        "proxy-hostname",
+		Usage:       "Hostname/IP that the proxy should report to client and server (usually the public IP)",
+		Required:    true,
+		Destination: &flagValueProxyHostname,
+	},
+	&cli.StringFlag{
+		Name:        "server-hostname",
+		Usage:       "Hostname/IP of upstream server",
+		Required:    true,
+		Destination: &flagValueServerHostname,
+	},
+	&cli.IntFlag{
+		Name:        "server-port",
+		Usage:       "Upstream server RakNet port",
+		Required:    true,
+		Action:      validatePort,
+		Destination: &flagValueServerPort,
+	},
+}
+
+func validatePort(ctx *cli.Context, v int) error {
+	if v < 0 || v > portMax {
+		return fmt.Errorf(`Invalid port value: %d. Valid port range: [0-%d]`, v, portMax)
+	}
+	return nil
 }
 
 func validateLogLevel(ctx *cli.Context, v string) error {

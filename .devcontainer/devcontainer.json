@@ -13,6 +13,5 @@
         "timonwong.shellcheck"
       ]
     }
-  },
-  "postCreateCommand": "git config --global --add safe.directory /workspaces/raknet-proxy"
+  }
 }
