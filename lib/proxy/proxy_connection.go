@@ -12,19 +12,19 @@ type proxyConnection struct {
 	payloadsFromServerChan chan UDPPayload
 	payloadsFromClientChan chan UDPPayload
 
-	clientWriteConn  *net.UDPConn
-	serverListenConn *net.UDPConn
-	serverWriteConn  *net.UDPConn
+	clientListenConn *net.UDPConn
+	serverConn       *net.UDPConn
 
-	clientAddr       *net.UDPAddr
-	serverAddr       *net.UDPAddr
-	serverListenAddr *net.UDPAddr // Address on which to listen for server pkts
+	clientAddr *net.UDPAddr
+	serverAddr *net.UDPAddr
 
 	clientAddrBytes []byte
 	serverAddrBytes []byte
 }
 
-func newProxyConnection(clientAddr *net.UDPAddr, serverAddr *net.UDPAddr) (*proxyConnection, error) {
+func newProxyConnection(clientListenConn *net.UDPConn, clientAddr *net.UDPAddr, serverAddr *net.UDPAddr) (*proxyConnection, error) {
+	log.Debugf("starting proxy connection for client %v...", clientAddr)
+
 	clientPortBytes := make([]byte, 2)
 	binary.LittleEndian.PutUint16(clientPortBytes, uint16(clientAddr.Port))
 	clientAddrBytes := append(clientAddr.IP, clientPortBytes...)
@@ -36,97 +36,89 @@ func newProxyConnection(clientAddr *net.UDPAddr, serverAddr *net.UDPAddr) (*prox
 	pConn := &proxyConnection{
 		payloadsFromServerChan: make(chan UDPPayload, 1),
 		payloadsFromClientChan: make(chan UDPPayload, 1),
+		clientListenConn:       clientListenConn,
 		clientAddr:             clientAddr,
 		serverAddr:             serverAddr,
 		clientAddrBytes:        clientAddrBytes,
 		serverAddrBytes:        serverAddrBytes,
 	}
 
+	pConn.log(log.Debug, `connecting to server...`)
+	go pConn.run()
+
 	return pConn, nil
 }
 
-func (pConn *proxyConnection) run() error {
-	log.Debugf("starting proxy connection for clientAddr %v...", pConn.clientAddr)
+func (pConn *proxyConnection) logf(fn func(string, ...interface{}), msg string, args ...interface{}) {
+	msg = fmt.Sprintf("[%v] %s", pConn.clientAddr, msg)
+	fn(msg, args...)
+}
 
-	log.Tracef("dialing  %v...", pConn.serverAddr)
-	serverWriteConn, err := net.DialUDP("udp", nil, pConn.serverAddr)
+func (pConn *proxyConnection) log(fn func(...interface{}), msg string) {
+	msg = fmt.Sprintf("[%v] %s", pConn.clientAddr, msg)
+	fn(msg)
+}
+
+func (pConn *proxyConnection) run() {
+	pConn.logf(log.Tracef, "dialing %v...", pConn.serverAddr)
+
+	serverConn, err := net.DialUDP("udp", nil, pConn.serverAddr)
 	if err != nil {
-		return fmt.Errorf("unable to dial upstream server UDP: %w", err)
+		pConn.logf(log.Fatalf, "unable to dial upstream server UDP: %v", err)
 	}
-	defer serverWriteConn.Close()
+	defer serverConn.Close()
+	pConn.logf(log.Tracef, "got connection to server %v->%v", serverConn.LocalAddr(), serverConn.RemoteAddr())
+	pConn.serverConn = serverConn
 
-	// Address to listen for responses from the server
-	serverListenAddr, err := net.ResolveUDPAddr("udp", serverWriteConn.LocalAddr().String())
-	if err != nil {
-		return fmt.Errorf("unable to resolve local listen addr: %w", err)
-	}
+	pConn.log(log.Debug, `starting client payload listener...`)
+	go pConn.handlePayloadsFromClient()
 
-	log.Tracef("getting listen conn for %v...", serverListenAddr)
-	serverListenConn, err := net.ListenUDP("udp", serverListenAddr)
-	if err != nil {
-		return fmt.Errorf("unable to listen for server responses on listen address: %w", err)
-	}
-	defer serverListenConn.Close()
+	pConn.log(log.Debug, `starting server payload listener...`)
+	go pConn.handlePayloadsFromServer()
 
-	log.Tracef("dialing %v...", pConn.clientAddr)
-	clientWriteConn, err := net.DialUDP("udp", nil, pConn.clientAddr)
-	if err != nil {
-		return fmt.Errorf("unable to dial upstream server UDP: %w", err)
-	}
-	defer clientWriteConn.Close()
-
-	pConn.serverListenAddr = serverListenAddr
-	pConn.serverWriteConn = serverWriteConn
-	pConn.serverListenConn = serverListenConn
-	pConn.clientWriteConn = clientWriteConn
-
-	log.Debugf(`starting client payload listener: clientAddr: %v`, pConn.clientAddr)
-	go pConn.listenPayloadsFromServer()
-
-	log.Debugf(`starting server payload listener: serverAddr: %v`, pConn.serverAddr)
-	go pConn.listenPayloadsFromClient()
-
-	b := make([]byte, maxUDPSize)
+	b := make([]byte, MaxUDPSize)
 	for {
-		n, _, err := pConn.serverListenConn.ReadFromUDP(b)
+		n, _, err := serverConn.ReadFromUDP(b)
 		if err != nil {
-			log.Debugf("error reading from server: %v", err)
+			pConn.logf(log.Debugf, "error reading %v->%v: %v", serverConn.RemoteAddr(), serverConn.LocalAddr(), err)
 			continue
 		}
 		payload := b[0:n]
-		log.Tracef(`from server to %d: n: %d, payload: "%s"`, pConn.serverListenAddr.Port, n, payload)
+		pConn.logf(log.Tracef, `read %v->%v: (%d)"%s"`, serverConn.RemoteAddr(), serverConn.LocalAddr(), n, payload)
+		pConn.logf(log.Tracef, `writing payload from server to chan <- "%s"`, payload)
 		pConn.payloadsFromServerChan <- payload
 	}
 }
 
-func (pConn *proxyConnection) listenPayloadsFromClient() {
-	log.Debugf(`listening for payloads from client chan: clientAddr: %v`, pConn.clientAddr)
+func (pConn *proxyConnection) handlePayloadsFromClient() {
+	pConn.log(log.Debug, "listening for payloads from client...")
 
 	for payload := range pConn.payloadsFromClientChan {
-		log.Tracef(`received payload from client chan: clientAddr: %v, payload: "%s"`, pConn.clientAddr, payload)
+		pConn.logf(log.Tracef, `proxying payload from client: "%s"`, payload)
 		pConn.proxyPayloadFromClient(payload)
 	}
 }
 
-func (pConn *proxyConnection) listenPayloadsFromServer() {
-	log.Debugf(`listening for payloads from server chan: serverAddr: %v`, pConn.serverAddr)
+func (pConn *proxyConnection) handlePayloadsFromServer() {
+	pConn.log(log.Debug, "listening for payloads from server...")
 
 	for payload := range pConn.payloadsFromServerChan {
-		log.Tracef(`received payload from server chan: serverAddr: %v, payload: "%s"`, pConn.serverAddr, payload)
+		pConn.logf(log.Tracef, `proxying payload from server: "%s"`, payload)
 		pConn.proxyPayloadFromServer(payload)
 	}
 }
 
 func (pConn *proxyConnection) proxyPayloadFromClient(payload UDPPayload) (int, error) {
 	_ = pConn.updatePayloadFromClient(payload)
-	log.Tracef(`writing payload to server: serverAddr: %v, payload: "%s"`, pConn.serverAddr, payload)
-	return pConn.serverWriteConn.Write(payload)
+	pConn.logf(log.Tracef, `write %v->%v: "%s"`, pConn.clientAddr, pConn.serverAddr, payload)
+	return pConn.serverConn.Write(payload)
 }
 
 func (pConn *proxyConnection) proxyPayloadFromServer(payload UDPPayload) (int, error) {
 	_ = pConn.updatePayloadFromServer(payload)
-	log.Tracef(`writing payload to client: clientAddr: %v, payload: "%s"`, pConn.clientAddr, payload)
-	return pConn.clientWriteConn.Write(payload)
+	pConn.logf(log.Tracef, `write %v->%v: "%s"`, pConn.serverAddr, pConn.clientAddr, payload)
+	n, _, err := pConn.clientListenConn.WriteMsgUDP(payload, []byte{}, pConn.clientAddr)
+	return n, err
 }
 
 func (pConn *proxyConnection) updatePayloadFromServer(payload UDPPayload) error {

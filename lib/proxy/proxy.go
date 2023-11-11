@@ -8,16 +8,18 @@ import (
 )
 
 type Proxy struct {
-	ListenPort     int
-	ServerHostname string
-	ServerPort     int
-	ProxyHostname  string
+	ListenPort       int
+	listenAddr       *net.UDPAddr
+	ServerHostname   string
+	ServerPort       int
+	serverAddr       *net.UDPAddr
+	clientListenConn *net.UDPConn
 }
 
 type UDPPayload []byte
 
 const (
-	maxUDPSize                      int  = 65535
+	MaxUDPSize                      int  = 65535
 	packetOpenConnectionRequest2    byte = 7
 	packetOpenConnectionReply2      byte = 8
 	packetConnectionRequestAccepted byte = 10
@@ -28,14 +30,16 @@ const (
 var proxyConns = make(map[int]*proxyConnection)
 
 func (p *Proxy) Run() error {
-	listenAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf(":%d", p.ListenPort))
+	serverAddrString := fmt.Sprintf("%s:%d", p.ServerHostname, p.ServerPort)
+	serverAddr, err := net.ResolveUDPAddr("udp", serverAddrString)
 	if err != nil {
-		return fmt.Errorf("unable to resolve listen address: %w", err)
+		return fmt.Errorf("unable to resolve server %v: %w", serverAddrString, err)
 	}
 
-	serverAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf("%s:%d", p.ServerHostname, p.ServerPort))
+	listenAddrString := fmt.Sprintf(":%d", p.ListenPort)
+	listenAddr, err := net.ResolveUDPAddr("udp", listenAddrString)
 	if err != nil {
-		return fmt.Errorf("unable to resolve upstream address: %w", err)
+		return fmt.Errorf("unable to resolve listen address %v: %w", listenAddrString, err)
 	}
 
 	clientListenConn, err := net.ListenUDP("udp", listenAddr)
@@ -45,44 +49,34 @@ func (p *Proxy) Run() error {
 	defer clientListenConn.Close()
 
 	log.Infof("Listening on %v, proxying to %v", listenAddr, serverAddr)
+	p.listenAddr = listenAddr
+	p.serverAddr = serverAddr
+	p.clientListenConn = clientListenConn
 
-	b := make([]byte, maxUDPSize)
+	b := make([]byte, MaxUDPSize)
 	for {
-		n, clientAddr, err := clientListenConn.ReadFromUDP(b)
+		n, clientAddr, err := p.clientListenConn.ReadFromUDP(b)
 		if err != nil {
 			log.Debugf("error reading from UDP: %v", err)
 			continue
 		}
 		payload := b[0:n]
-		log.Tracef(`payload from client: n: %d, clientAddr: %v, payload: "%s"`, n, clientAddr, payload)
+		log.Tracef(`read %v->%v: (%d)"%s"`, clientAddr, serverAddr, n, payload)
 
 		// Check if existing conn exists for client
 		pConn, ok := proxyConns[clientAddr.Port]
 		if !ok {
-			log.Debugf("no proxy connection found for clientAddr %v, starting...", clientAddr)
-			// proxyAddrToServerString := fmt.Sprintf("%s:%d", p.ProxyHostname, clientAddr.Port)
-			// proxyAddrToServer, err := net.ResolveUDPAddr("udp", proxyAddrToServerString)
-			// if err != nil {
-			// 	return fmt.Errorf(`unable to resolve proxy address "%s": %w`, proxyAddrToServerString, err)
-			// }
-
-			// proxyAddrToClientString := fmt.Sprintf("%s:%d", p.ProxyHostname, p.ServerPort)
-			// proxyAddrToClient, err := net.ResolveUDPAddr("udp", proxyAddrToClientString)
-			// if err != nil {
-			// 	return fmt.Errorf(`unable to resolve proxy address "%s": %w`, proxyAddrToClientString, err)
-			// }
+			log.Debugf("no proxy connection found for %v, starting...", clientAddr)
 
 			// Must be `=` and not `:=` to ensure that `pConn` is not reinitialized
-			pConn, err = newProxyConnection(clientAddr, serverAddr)
+			pConn, err = newProxyConnection(p.clientListenConn, clientAddr, p.serverAddr)
 			if err != nil {
-				return fmt.Errorf(`unable to start new proxy connection: %w`, err)
+				return fmt.Errorf(`unable to start new proxy connection for %v: %w`, clientAddr, err)
 			}
 
-			go pConn.run()
 			proxyConns[clientAddr.Port] = pConn
 		}
-
-		log.Tracef(`writing payload to client chan: clientAddr: %v, payload: "%s"`, pConn.clientAddr, payload)
+		log.Tracef(`writing payload from client %v to chan <- "%s"`, clientAddr, payload)
 		pConn.payloadsFromClientChan <- payload
 	}
 }

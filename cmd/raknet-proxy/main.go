@@ -35,7 +35,6 @@ func runApp(cCtx *cli.Context) error {
 	proxy := &proxy.Proxy{
 		ServerHostname: flagValueServerHostname,
 		ServerPort:     flagValueServerPort,
-		ProxyHostname:  flagValueProxyHostname,
 		ListenPort:     flagValueListenPort,
 	}
 

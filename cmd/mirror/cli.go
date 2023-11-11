@@ -49,11 +49,9 @@ var (
 )
 
 var (
-	flagValueLogLevel       string
-	flagValueLogFormat      string
-	flagValueServerHostname string
-	flagValueServerPort     int
-	flagValueListenPort     int
+	flagValueLogLevel   string
+	flagValueLogFormat  string
+	flagValueListenPort int
 )
 
 var cliFlags = []cli.Flag{
@@ -77,19 +75,6 @@ var cliFlags = []cli.Flag{
 		Value:       defaultLogLevel.text,
 		Action:      validateLogLevel,
 		Destination: &flagValueLogLevel,
-	},
-	&cli.StringFlag{
-		Name:        "server-hostname",
-		Usage:       "Hostname/IP of upstream server",
-		Required:    true,
-		Destination: &flagValueServerHostname,
-	},
-	&cli.IntFlag{
-		Name:        "server-port",
-		Usage:       "Upstream server RakNet port",
-		Required:    true,
-		Action:      validatePort,
-		Destination: &flagValueServerPort,
 	},
 }
 
