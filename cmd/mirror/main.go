@@ -8,13 +8,14 @@ import (
 	_ "net/http/pprof"
 
 	log "github.com/sirupsen/logrus"
+	_cli "github.com/urfave/cli/v2"
 
+	"github.com/percygrunwald/raknet-proxy/lib/cli"
 	"github.com/percygrunwald/raknet-proxy/lib/proxy"
-	"github.com/urfave/cli/v2"
 )
 
 func main() {
-	app := &cli.App{
+	app := &_cli.App{
 		Name:    "mirror",
 		Usage:   "Mirrors UDP packets back to a client",
 		Flags:   cliFlags,
@@ -27,12 +28,12 @@ func main() {
 	}
 }
 
-func runApp(cCtx *cli.Context) error {
-	logLevel := getLogLevel(flagValueLogLevel)
-	logFormat := getLogFormat(flagValueLogFormat)
-	log.SetFormatter(logFormat.formatter)
+func runApp(cCtx *_cli.Context) error {
+	logLevel := cli.GetLogLevel(flagValueLogLevel)
+	logFormat := cli.GetLogFormat(flagValueLogFormat)
+	log.SetFormatter(logFormat.Formatter)
 	log.SetOutput(os.Stdout)
-	log.SetLevel(logLevel.level)
+	log.SetLevel(logLevel.Level)
 
 	listenAddr, err := net.ResolveUDPAddr("udp", fmt.Sprintf(":%d", flagValueListenPort))
 	if err != nil {

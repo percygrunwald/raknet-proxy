@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"encoding/binary"
+	"encoding/hex"
 	"fmt"
 	"net"
 
@@ -26,12 +27,20 @@ func newProxyConnection(clientListenConn *net.UDPConn, clientAddr *net.UDPAddr, 
 	log.Debugf("starting proxy connection for client %v...", clientAddr)
 
 	clientPortBytes := make([]byte, 2)
-	binary.LittleEndian.PutUint16(clientPortBytes, uint16(clientAddr.Port))
-	clientAddrBytes := append(clientAddr.IP, clientPortBytes...)
+	binary.BigEndian.PutUint16(clientPortBytes, uint16(clientAddr.Port))
+	clientAddrBytes := make([]byte, 4)
+	for i, b := range clientAddr.IP.To4() {
+		copy(clientAddrBytes[i:i+1], []byte{^b})
+	}
+	clientAddrBytes = append(clientAddrBytes, clientPortBytes...)
 
 	serverPortBytes := make([]byte, 2)
-	binary.LittleEndian.PutUint16(serverPortBytes, uint16(serverAddr.Port))
-	serverAddrBytes := append(serverAddr.IP, serverPortBytes...)
+	binary.BigEndian.PutUint16(serverPortBytes, uint16(serverAddr.Port))
+	serverAddrBytes := make([]byte, 4)
+	for i, b := range serverAddr.IP.To4() {
+		copy(serverAddrBytes[i:i+1], []byte{^b})
+	}
+	serverAddrBytes = append(serverAddrBytes, serverPortBytes...)
 
 	pConn := &proxyConnection{
 		payloadsFromServerChan: make(chan UDPPayload, 1),
@@ -84,8 +93,8 @@ func (pConn *proxyConnection) run() {
 			continue
 		}
 		payload := b[0:n]
-		pConn.logf(log.Tracef, `read %v->%v: (%d)"%s"`, serverConn.RemoteAddr(), serverConn.LocalAddr(), n, payload)
-		pConn.logf(log.Tracef, `writing payload from server to chan <- "%s"`, payload)
+		pConn.logf(log.Tracef, `read %v->%v: (%d)"%s"`, serverConn.RemoteAddr(), serverConn.LocalAddr(), n, hex.EncodeToString(payload))
+		pConn.logf(log.Tracef, `writing payload from server to chan <- "%s"`, hex.EncodeToString(payload))
 		pConn.payloadsFromServerChan <- payload
 	}
 }
@@ -94,7 +103,7 @@ func (pConn *proxyConnection) handlePayloadsFromClient() {
 	pConn.log(log.Debug, "listening for payloads from client...")
 
 	for payload := range pConn.payloadsFromClientChan {
-		pConn.logf(log.Tracef, `proxying payload from client: "%s"`, payload)
+		pConn.logf(log.Tracef, `proxying payload from client: "%s"`, hex.EncodeToString(payload))
 		pConn.proxyPayloadFromClient(payload)
 	}
 }
@@ -103,20 +112,20 @@ func (pConn *proxyConnection) handlePayloadsFromServer() {
 	pConn.log(log.Debug, "listening for payloads from server...")
 
 	for payload := range pConn.payloadsFromServerChan {
-		pConn.logf(log.Tracef, `proxying payload from server: "%s"`, payload)
+		pConn.logf(log.Tracef, `proxying payload from server: "%s"`, hex.EncodeToString(payload))
 		pConn.proxyPayloadFromServer(payload)
 	}
 }
 
 func (pConn *proxyConnection) proxyPayloadFromClient(payload UDPPayload) (int, error) {
 	_ = pConn.updatePayloadFromClient(payload)
-	pConn.logf(log.Tracef, `write %v->%v: "%s"`, pConn.clientAddr, pConn.serverAddr, payload)
+	pConn.logf(log.Tracef, `write %v->%v: "%s"`, pConn.clientAddr, pConn.serverAddr, hex.EncodeToString(payload))
 	return pConn.serverConn.Write(payload)
 }
 
 func (pConn *proxyConnection) proxyPayloadFromServer(payload UDPPayload) (int, error) {
 	_ = pConn.updatePayloadFromServer(payload)
-	pConn.logf(log.Tracef, `write %v->%v: "%s"`, pConn.serverAddr, pConn.clientAddr, payload)
+	pConn.logf(log.Tracef, `write %v->%v: "%s"`, pConn.serverAddr, pConn.clientAddr, hex.EncodeToString(payload))
 	n, _, err := pConn.clientListenConn.WriteMsgUDP(payload, []byte{}, pConn.clientAddr)
 	return n, err
 }
@@ -124,9 +133,9 @@ func (pConn *proxyConnection) proxyPayloadFromServer(payload UDPPayload) (int, e
 func (pConn *proxyConnection) updatePayloadFromServer(payload UDPPayload) error {
 	switch payload[0] {
 	case packetOpenConnectionReply2:
-		return pConn.updatePacketOpenConnectionReply2(payload)
+		return pConn.updateOpenConnectionReply2(payload)
 	case packetConnectionRequestAccepted:
-		return pConn.updatePacketConnectionRequestAccepted(payload)
+		return pConn.updateConnectionRequestAccepted(payload)
 	default:
 		return nil
 	}
@@ -135,9 +144,9 @@ func (pConn *proxyConnection) updatePayloadFromServer(payload UDPPayload) error 
 func (pConn *proxyConnection) updatePayloadFromClient(payload UDPPayload) error {
 	switch payload[0] {
 	case packetOpenConnectionRequest2:
-		return pConn.updatePacketOpenConnectionRequest2(payload)
+		return pConn.updateOpenConnectionRequest2(payload)
 	case packetNewIncomingConnection:
-		return pConn.updatePacketNewIncomingConnection(payload)
+		return pConn.updateNewIncomingConnection(payload)
 	default:
 		return nil
 	}
@@ -156,23 +165,28 @@ func (pConn *proxyConnection) updatePayloadFromClient(payload UDPPayload) error 
 // uint24le				3					N/A				3-byte little-endian unsigned integer
 
 // Client to server
-func (pConn *proxyConnection) updatePacketOpenConnectionRequest2(payload UDPPayload) error {
-	// Magic					MAGIC		payload[1:7]
-	// Server Address	address	payload[8] is ip version, payload[9:14] ip4 addr, payload[9:36] ip6 addr
+func (pConn *proxyConnection) updateOpenConnectionRequest2(payload UDPPayload) error {
+	// Magic					MAGIC		payload[1:17]
+	// Server Address	address	payload[17] is ip version, payload[18:24] ip4 addr, payload[18:46] ip6 addr
 	// MTU						short
 	// Client GUID		Long
-	if payload[8] == ipv4 {
+	ipVersion := payload[17]
+	pConn.logf(log.Tracef, `updating OpenConnectionRequest2 payload "%s", ip version: %d`, hex.EncodeToString(payload), ipVersion)
+	if ipVersion == ipv4 {
 		// Replace payload[9:14] with the server address and port
-		copy(payload[9:14], pConn.serverAddrBytes)
+		pConn.logf(log.Tracef, `OpenConnectionRequest2: replacing "%s" with "%s"`, hex.EncodeToString(payload[18:24]), hex.EncodeToString(pConn.serverAddrBytes))
+		copy(payload[18:24], pConn.serverAddrBytes)
 	}
 	return nil
 }
 
 // Client to server
-func (pConn *proxyConnection) updatePacketNewIncomingConnection(payload UDPPayload) error {
+func (pConn *proxyConnection) updateNewIncomingConnection(payload UDPPayload) error {
 	// Server address		address address	payload[1] is ip version, payload[2:8] is ip4 addr, payload[2:30] is ip6 addr
 	// Internal address	address	(unknown what this is used for)
-	if payload[1] == ipv4 {
+	ipVersion := payload[1]
+	pConn.logf(log.Tracef, `updating NewIncomingConnection payload "%s", ip version: %d`, hex.EncodeToString(payload), ipVersion)
+	if ipVersion == ipv4 {
 		// Replace payload[2:8] with server ip and port
 		copy(payload[2:8], pConn.serverAddrBytes)
 	}
@@ -180,26 +194,30 @@ func (pConn *proxyConnection) updatePacketNewIncomingConnection(payload UDPPaylo
 }
 
 // Server to client
-func (pConn *proxyConnection) updatePacketOpenConnectionReply2(payload UDPPayload) error {
-	// Magic								MAGIC		payload[1:8]
-	// Server GUID					Long		payload[8:16]
-	// Client Address				address	payload[16] is ip version, payload[17:23] ip4 addr, payload[17:55] ip6 addr
+func (pConn *proxyConnection) updateOpenConnectionReply2(payload UDPPayload) error {
+	// Magic								MAGIC		payload[1:17]
+	// Server GUID					Long		payload[17:25]
+	// Client Address				address	payload[25] is ip version, payload[26:32] ip4 addr, payload[26:54] ip6 addr
 	// MTU									short
 	// Encryption enabled?	boolean
-	if payload[16] == ipv4 {
+	ipVersion := payload[25]
+	pConn.logf(log.Tracef, `updating OpenConnectionReply2 payload "%s", ip version: %d`, hex.EncodeToString(payload), ipVersion)
+	if ipVersion == ipv4 {
 		// Replace payload[17:23] with client ip and port
-		copy(payload[17:23], pConn.clientAddrBytes)
+		copy(payload[26:32], pConn.clientAddrBytes)
 	}
 	return nil
 }
 
 // Server to client
-func (pConn *proxyConnection) updatePacketConnectionRequestAccepted(payload UDPPayload) error {
+func (pConn *proxyConnection) updateConnectionRequestAccepted(payload UDPPayload) error {
 	// Client address		address	payload[1] is ip version, payload[2:8] is ip4 addr, payload[2:30] is ip6 addr
 	// System index			short
 	// Internal IDs			10x address (unknown what this is used for)
 	// Request time			Long
 	// Time							Long
+	ipVersion := payload[1]
+	pConn.logf(log.Tracef, `updating ConnectionRequestAccepted payload "%s", ip version: %d`, hex.EncodeToString(payload), ipVersion)
 	if payload[1] == ipv4 {
 		// Replace payload[2:8] with client ip and port
 		copy(payload[2:8], pConn.clientAddrBytes)

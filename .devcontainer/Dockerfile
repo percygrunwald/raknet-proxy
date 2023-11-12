@@ -10,7 +10,7 @@ ENV GO_DEPS="coreutils curl"
 ENV PYTHON_DEPS="build-essential libssl-dev zlib1g-dev libbz2-dev libreadline-dev libsqlite3-dev curl libncursesw5-dev xz-utils tk-dev libxml2-dev libxmlsec1-dev libffi-dev liblzma-dev"
 
 # Other deps
-ENV OTHER_DEPS="sudo netcat socat iproute2 command-not-found"
+ENV OTHER_DEPS="sudo netcat socat iproute2 tcpdump command-not-found"
 
 SHELL ["/bin/bash", "-c"]
 

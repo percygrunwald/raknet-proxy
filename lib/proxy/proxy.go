@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"encoding/hex"
 	"fmt"
 	"net"
 
@@ -61,7 +62,7 @@ func (p *Proxy) Run() error {
 			continue
 		}
 		payload := b[0:n]
-		log.Tracef(`read %v->%v: (%d)"%s"`, clientAddr, serverAddr, n, payload)
+		log.Tracef(`read %v->%v: (%d)"%s"`, clientAddr, serverAddr, n, hex.EncodeToString(payload))
 
 		// Check if existing conn exists for client
 		pConn, ok := proxyConns[clientAddr.Port]
@@ -76,7 +77,7 @@ func (p *Proxy) Run() error {
 
 			proxyConns[clientAddr.Port] = pConn
 		}
-		log.Tracef(`writing payload from client %v to chan <- "%s"`, clientAddr, payload)
+		log.Tracef(`writing payload from client %v to chan <- "%s"`, clientAddr, hex.EncodeToString(payload))
 		pConn.payloadsFromClientChan <- payload
 	}
 }

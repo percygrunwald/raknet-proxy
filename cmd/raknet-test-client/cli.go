@@ -9,19 +9,13 @@ import (
 )
 
 var (
-	flagValueLogLevel   string
-	flagValueLogFormat  string
-	flagValueListenPort int
+	flagValueLogLevel       string
+	flagValueLogFormat      string
+	flagValueServerHostname string
+	flagValueServerPort     int
 )
 
 var cliFlags = []_cli.Flag{
-	&_cli.IntFlag{
-		Name:        "listen-port",
-		Usage:       "Port on which to listen for RakNet packets from clients",
-		Required:    true,
-		Action:      cli.ValidatePort,
-		Destination: &flagValueListenPort,
-	},
 	&_cli.StringFlag{
 		Name:        "log-format",
 		Usage:       fmt.Sprintf("Format in which to output logs. Valid options: %v", cli.LogFormats),
@@ -35,5 +29,18 @@ var cliFlags = []_cli.Flag{
 		Value:       cli.DefaultLogLevel.Text,
 		Action:      cli.ValidateLogLevel,
 		Destination: &flagValueLogLevel,
+	},
+	&_cli.StringFlag{
+		Name:        "server-hostname",
+		Usage:       "Hostname/IP of upstream server",
+		Required:    true,
+		Destination: &flagValueServerHostname,
+	},
+	&_cli.IntFlag{
+		Name:        "server-port",
+		Usage:       "Upstream server RakNet port",
+		Required:    true,
+		Action:      cli.ValidatePort,
+		Destination: &flagValueServerPort,
 	},
 }

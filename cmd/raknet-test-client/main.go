@@ -1,21 +1,22 @@
 package main
 
 import (
+	"fmt"
 	"os"
 
 	_ "net/http/pprof"
 
+	"github.com/sandertv/go-raknet"
 	log "github.com/sirupsen/logrus"
 	_cli "github.com/urfave/cli/v2"
 
 	"github.com/percygrunwald/raknet-proxy/lib/cli"
-	"github.com/percygrunwald/raknet-proxy/lib/proxy"
 )
 
 func main() {
 	app := &_cli.App{
-		Name:    "raknet-proxy",
-		Usage:   "RakNet proxy",
+		Name:    "raknet-test-client",
+		Usage:   "Test client that tries to connect to a server",
 		Flags:   cliFlags,
 		Action:  runApp,
 		Version: "v0.0.1",
@@ -33,11 +34,15 @@ func runApp(cCtx *_cli.Context) error {
 	log.SetOutput(os.Stdout)
 	log.SetLevel(logLevel.Level)
 
-	proxy := &proxy.Proxy{
-		ServerHostname: flagValueServerHostname,
-		ServerPort:     flagValueServerPort,
-		ListenPort:     flagValueListenPort,
+	serverAddr := fmt.Sprintf("%s:%d", flagValueServerHostname, flagValueServerPort)
+	log.Debugf("dialing %v", serverAddr)
+	conn, err := raknet.Dial(serverAddr)
+	if err != nil {
+		return fmt.Errorf("failed to dial %v: %w", serverAddr, err)
 	}
 
-	return proxy.Run()
+	log.Debugf("connected to %v", serverAddr)
+	defer conn.Close()
+
+	return nil
 }

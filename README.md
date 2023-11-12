@@ -13,3 +13,9 @@ go run ./cmd/mirror --log-format text --log-level trace --listen-port 28017
 ```
 printf "hello world" | socat - UDP-DATAGRAM:172.17.0.2:28016
 ```
+```
+go run ./cmd/raknet-test-server --listen-port 28017 --log-format text --log-level trace
+```
+```
+go run ./cmd/raknet-test-client --log-format text --log-level trace --server-hostname localhost --server-port 28016
+```
