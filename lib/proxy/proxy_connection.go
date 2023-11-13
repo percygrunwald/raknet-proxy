@@ -118,7 +118,7 @@ func getProxyAsClientAddrBytes(udpAddr *net.UDPAddr, addr net.Addr) []byte {
 // version byte (set to 4 by default)
 func getIPPortBytes(ip net.IP, port int) []byte {
 	// Initialize ipv4 byteslice
-	addrBytes := []byte{ipv4}
+	addrBytes := []byte{}
 	portBytes := make([]byte, 2)
 	binary.BigEndian.PutUint16(portBytes, uint16(port))
 	for _, b := range ip.To4() {
@@ -168,7 +168,7 @@ func (pConn *proxyConnection) updatePayloadFromServer(payload UDPPayload) (UDPPa
 }
 
 func (pConn *proxyConnection) updatePayloadFromClient(payload UDPPayload) (UDPPayload, error) {
-	payload = bytes.ReplaceAll(payload, pConn.clientAddrBytes, pConn.proxyAsClientAddrBytes)
+	// payload = bytes.ReplaceAll(payload, pConn.clientAddrBytes, pConn.proxyAsClientAddrBytes)
 	payload = bytes.ReplaceAll(payload, pConn.proxyAsServerAddrBytes, pConn.serverAddrBytes)
 
 	return payload, nil
