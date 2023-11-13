@@ -14,9 +14,16 @@ var (
 	flagValueServerHostname string
 	flagValueServerPort     int
 	flagValueListenPort     int
+	flagValueProxyHostname  string
 )
 
 var cliFlags = []_cli.Flag{
+	&_cli.StringFlag{
+		Name:        "proxy-hostname",
+		Usage:       "The public IP of the proxy for replacement in packets",
+		Required:    true,
+		Destination: &flagValueProxyHostname,
+	},
 	&_cli.IntFlag{
 		Name:        "listen-port",
 		Usage:       "Port on which to listen for RakNet packets from clients",

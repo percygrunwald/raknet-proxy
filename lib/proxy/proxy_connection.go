@@ -1,10 +1,13 @@
 package proxy
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"net"
+	"strconv"
+	"strings"
 
 	log "github.com/sirupsen/logrus"
 )
@@ -16,31 +19,25 @@ type proxyConnection struct {
 	clientListenConn *net.UDPConn
 	serverConn       *net.UDPConn
 
-	clientAddr *net.UDPAddr
-	serverAddr *net.UDPAddr
+	clientAddr        *net.UDPAddr
+	serverAddr        *net.UDPAddr
+	proxyAsServerAddr *net.UDPAddr
+	proxyAsClientAddr net.Addr
 
-	clientAddrBytes []byte
-	serverAddrBytes []byte
+	clientAddrBytes        []byte
+	serverAddrBytes        []byte
+	proxyAsServerAddrBytes []byte
+	proxyAsClientAddrBytes []byte
 }
 
-func newProxyConnection(clientListenConn *net.UDPConn, clientAddr *net.UDPAddr, serverAddr *net.UDPAddr) (*proxyConnection, error) {
+func newProxyConnection(clientListenConn *net.UDPConn, clientAddr *net.UDPAddr,
+	serverAddr *net.UDPAddr, proxyAsServerAddr *net.UDPAddr) (*proxyConnection, error) {
+
 	log.Debugf("starting proxy connection for client %v...", clientAddr)
 
-	clientPortBytes := make([]byte, 2)
-	binary.BigEndian.PutUint16(clientPortBytes, uint16(clientAddr.Port))
-	clientAddrBytes := make([]byte, 4)
-	for i, b := range clientAddr.IP.To4() {
-		copy(clientAddrBytes[i:i+1], []byte{^b})
-	}
-	clientAddrBytes = append(clientAddrBytes, clientPortBytes...)
-
-	serverPortBytes := make([]byte, 2)
-	binary.BigEndian.PutUint16(serverPortBytes, uint16(serverAddr.Port))
-	serverAddrBytes := make([]byte, 4)
-	for i, b := range serverAddr.IP.To4() {
-		copy(serverAddrBytes[i:i+1], []byte{^b})
-	}
-	serverAddrBytes = append(serverAddrBytes, serverPortBytes...)
+	clientAddrBytes := getUDPAddrBytes(clientAddr)
+	serverAddrBytes := getUDPAddrBytes(serverAddr)
+	proxyAsServerAddrBytes := getUDPAddrBytes(proxyAsServerAddr)
 
 	pConn := &proxyConnection{
 		payloadsFromServerChan: make(chan UDPPayload, 1),
@@ -48,14 +45,43 @@ func newProxyConnection(clientListenConn *net.UDPConn, clientAddr *net.UDPAddr, 
 		clientListenConn:       clientListenConn,
 		clientAddr:             clientAddr,
 		serverAddr:             serverAddr,
+		proxyAsServerAddr:      proxyAsServerAddr,
 		clientAddrBytes:        clientAddrBytes,
 		serverAddrBytes:        serverAddrBytes,
+		proxyAsServerAddrBytes: proxyAsServerAddrBytes,
 	}
 
 	pConn.log(log.Debug, `connecting to server...`)
 	go pConn.run()
 
 	return pConn, nil
+}
+
+func getUDPAddrBytes(addr *net.UDPAddr) []byte {
+	return getIPPortBytes(addr.IP, addr.Port)
+}
+
+func getAddrBytes(addr net.Addr) []byte {
+	split := strings.Split(addr.String(), ":")
+	port, _ := strconv.Atoi(split[1])
+	ip := net.ParseIP(split[0])
+
+	return getIPPortBytes(ip, port)
+}
+
+// Get the byte sequence of the IP and port in the RakNet form, including the IP
+// version byte (set to 4 by default)
+func getIPPortBytes(ip net.IP, port int) []byte {
+	// Initialize ipv4 byteslice
+	addrBytes := []byte{ipv4}
+	portBytes := make([]byte, 2)
+	binary.BigEndian.PutUint16(portBytes, uint16(port))
+	for _, b := range ip.To4() {
+		addrBytes = append(addrBytes, ^b)
+	}
+	addrBytes = append(addrBytes, portBytes...)
+
+	return addrBytes
 }
 
 func (pConn *proxyConnection) logf(fn func(string, ...interface{}), msg string, args ...interface{}) {
@@ -78,6 +104,8 @@ func (pConn *proxyConnection) run() {
 	defer serverConn.Close()
 	pConn.logf(log.Tracef, "got connection to server %v->%v", serverConn.LocalAddr(), serverConn.RemoteAddr())
 	pConn.serverConn = serverConn
+	pConn.proxyAsClientAddr = serverConn.LocalAddr()
+	pConn.proxyAsClientAddrBytes = getAddrBytes(pConn.proxyAsClientAddr)
 
 	pConn.log(log.Debug, `starting client payload listener...`)
 	go pConn.handlePayloadsFromClient()
@@ -118,109 +146,28 @@ func (pConn *proxyConnection) handlePayloadsFromServer() {
 }
 
 func (pConn *proxyConnection) proxyPayloadFromClient(payload UDPPayload) (int, error) {
-	_ = pConn.updatePayloadFromClient(payload)
+	payload, _ = pConn.updatePayloadFromClient(payload)
 	pConn.logf(log.Tracef, `write %v->%v: "%s"`, pConn.clientAddr, pConn.serverAddr, hex.EncodeToString(payload))
 	return pConn.serverConn.Write(payload)
 }
 
 func (pConn *proxyConnection) proxyPayloadFromServer(payload UDPPayload) (int, error) {
-	_ = pConn.updatePayloadFromServer(payload)
+	payload, _ = pConn.updatePayloadFromServer(payload)
 	pConn.logf(log.Tracef, `write %v->%v: "%s"`, pConn.serverAddr, pConn.clientAddr, hex.EncodeToString(payload))
 	n, _, err := pConn.clientListenConn.WriteMsgUDP(payload, []byte{}, pConn.clientAddr)
 	return n, err
 }
 
-func (pConn *proxyConnection) updatePayloadFromServer(payload UDPPayload) error {
-	switch payload[0] {
-	case packetOpenConnectionReply2:
-		return pConn.updateOpenConnectionReply2(payload)
-	case packetConnectionRequestAccepted:
-		return pConn.updateConnectionRequestAccepted(payload)
-	default:
-		return nil
-	}
+func (pConn *proxyConnection) updatePayloadFromServer(payload UDPPayload) (UDPPayload, error) {
+	payload = bytes.ReplaceAll(payload, pConn.serverAddrBytes, pConn.proxyAsServerAddrBytes)
+	payload = bytes.ReplaceAll(payload, pConn.proxyAsClientAddrBytes, pConn.clientAddrBytes)
+
+	return payload, nil
 }
 
-func (pConn *proxyConnection) updatePayloadFromClient(payload UDPPayload) error {
-	switch payload[0] {
-	case packetOpenConnectionRequest2:
-		return pConn.updateOpenConnectionRequest2(payload)
-	case packetNewIncomingConnection:
-		return pConn.updateNewIncomingConnection(payload)
-	default:
-		return nil
-	}
-}
+func (pConn *proxyConnection) updatePayloadFromClient(payload UDPPayload) (UDPPayload, error) {
+	payload = bytes.ReplaceAll(payload, pConn.clientAddrBytes, pConn.proxyAsClientAddrBytes)
+	payload = bytes.ReplaceAll(payload, pConn.proxyAsServerAddrBytes, pConn.serverAddrBytes)
 
-// https://wiki.vg/Raknet_Protocol#Packets
-// Name						Size (b)	Range			Notes
-// byte						1					0 to 255
-// Long						8					-2^63 to 2^63-1	Signed 64-bit Integer
-// Magic					16				00ffff00fefefefefdfdfdfd12345678	Always those hex bytes, corresponding to RakNet's default OFFLINE_MESSAGE_DATA_ID
-// short					2					-32768 to 32767
-// unsigned short	2					0 to 65535
-// string					unsigned short + string	N/A	Prefixed by a short containing the length of the string in characters. It appears that only the following ASCII characters can be displayed: !"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\]^_`abcdefghijklmnopqrstuvwxyz{|}~
-// boolean				1					0 to 1		True is encoded as 0x01, false as 0x00.
-// address				7 or 29		N/A				1 byte for the IP version (4 or 6), followed by (for IPv4) 4 bytes for the IP and an unsigned short for the port number or (for IPv6) an unsigned short for the address family (always 0x17), an unsigned short for the port, 8 bytes for the flow info and 16 address bytes
-// uint24le				3					N/A				3-byte little-endian unsigned integer
-
-// Client to server
-func (pConn *proxyConnection) updateOpenConnectionRequest2(payload UDPPayload) error {
-	// Magic					MAGIC		payload[1:17]
-	// Server Address	address	payload[17] is ip version, payload[18:24] ip4 addr, payload[18:46] ip6 addr
-	// MTU						short
-	// Client GUID		Long
-	ipVersion := payload[17]
-	pConn.logf(log.Tracef, `updating OpenConnectionRequest2 payload "%s", ip version: %d`, hex.EncodeToString(payload), ipVersion)
-	if ipVersion == ipv4 {
-		// Replace payload[9:14] with the server address and port
-		pConn.logf(log.Tracef, `OpenConnectionRequest2: replacing "%s" with "%s"`, hex.EncodeToString(payload[18:24]), hex.EncodeToString(pConn.serverAddrBytes))
-		copy(payload[18:24], pConn.serverAddrBytes)
-	}
-	return nil
-}
-
-// Client to server
-func (pConn *proxyConnection) updateNewIncomingConnection(payload UDPPayload) error {
-	// Server address		address address	payload[1] is ip version, payload[2:8] is ip4 addr, payload[2:30] is ip6 addr
-	// Internal address	address	(unknown what this is used for)
-	ipVersion := payload[1]
-	pConn.logf(log.Tracef, `updating NewIncomingConnection payload "%s", ip version: %d`, hex.EncodeToString(payload), ipVersion)
-	if ipVersion == ipv4 {
-		// Replace payload[2:8] with server ip and port
-		copy(payload[2:8], pConn.serverAddrBytes)
-	}
-	return nil
-}
-
-// Server to client
-func (pConn *proxyConnection) updateOpenConnectionReply2(payload UDPPayload) error {
-	// Magic								MAGIC		payload[1:17]
-	// Server GUID					Long		payload[17:25]
-	// Client Address				address	payload[25] is ip version, payload[26:32] ip4 addr, payload[26:54] ip6 addr
-	// MTU									short
-	// Encryption enabled?	boolean
-	ipVersion := payload[25]
-	pConn.logf(log.Tracef, `updating OpenConnectionReply2 payload "%s", ip version: %d`, hex.EncodeToString(payload), ipVersion)
-	if ipVersion == ipv4 {
-		// Replace payload[17:23] with client ip and port
-		copy(payload[26:32], pConn.clientAddrBytes)
-	}
-	return nil
-}
-
-// Server to client
-func (pConn *proxyConnection) updateConnectionRequestAccepted(payload UDPPayload) error {
-	// Client address		address	payload[1] is ip version, payload[2:8] is ip4 addr, payload[2:30] is ip6 addr
-	// System index			short
-	// Internal IDs			10x address (unknown what this is used for)
-	// Request time			Long
-	// Time							Long
-	ipVersion := payload[1]
-	pConn.logf(log.Tracef, `updating ConnectionRequestAccepted payload "%s", ip version: %d`, hex.EncodeToString(payload), ipVersion)
-	if payload[1] == ipv4 {
-		// Replace payload[2:8] with client ip and port
-		copy(payload[2:8], pConn.clientAddrBytes)
-	}
-	return nil
+	return payload, nil
 }

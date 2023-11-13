@@ -11,6 +11,7 @@ import (
 type Proxy struct {
 	ListenPort       int
 	listenAddr       *net.UDPAddr
+	ProxyHostname    string
 	ServerHostname   string
 	ServerPort       int
 	serverAddr       *net.UDPAddr
@@ -43,6 +44,9 @@ func (p *Proxy) Run() error {
 		return fmt.Errorf("unable to resolve listen address %v: %w", listenAddrString, err)
 	}
 
+	proxyAddrString := fmt.Sprintf("%s:%d", p.ProxyHostname, p.ListenPort)
+	proxyAddr, err := net.ResolveUDPAddr("udp", proxyAddrString)
+
 	clientListenConn, err := net.ListenUDP("udp", listenAddr)
 	if err != nil {
 		return fmt.Errorf("unable to start client listener: %w", err)
@@ -70,7 +74,7 @@ func (p *Proxy) Run() error {
 			log.Debugf("no proxy connection found for %v, starting...", clientAddr)
 
 			// Must be `=` and not `:=` to ensure that `pConn` is not reinitialized
-			pConn, err = newProxyConnection(p.clientListenConn, clientAddr, p.serverAddr)
+			pConn, err = newProxyConnection(p.clientListenConn, clientAddr, p.serverAddr, proxyAddr)
 			if err != nil {
 				return fmt.Errorf(`unable to start new proxy connection for %v: %w`, clientAddr, err)
 			}
