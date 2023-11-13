@@ -57,33 +57,6 @@ func newProxyConnection(clientListenConn *net.UDPConn, clientAddr *net.UDPAddr,
 	return pConn, nil
 }
 
-func getUDPAddrBytes(addr *net.UDPAddr) []byte {
-	return getIPPortBytes(addr.IP, addr.Port)
-}
-
-func getAddrBytes(addr net.Addr) []byte {
-	split := strings.Split(addr.String(), ":")
-	port, _ := strconv.Atoi(split[1])
-	ip := net.ParseIP(split[0])
-
-	return getIPPortBytes(ip, port)
-}
-
-// Get the byte sequence of the IP and port in the RakNet form, including the IP
-// version byte (set to 4 by default)
-func getIPPortBytes(ip net.IP, port int) []byte {
-	// Initialize ipv4 byteslice
-	addrBytes := []byte{ipv4}
-	portBytes := make([]byte, 2)
-	binary.BigEndian.PutUint16(portBytes, uint16(port))
-	for _, b := range ip.To4() {
-		addrBytes = append(addrBytes, ^b)
-	}
-	addrBytes = append(addrBytes, portBytes...)
-
-	return addrBytes
-}
-
 func (pConn *proxyConnection) logf(fn func(string, ...interface{}), msg string, args ...interface{}) {
 	msg = fmt.Sprintf("[%v] %s", pConn.clientAddr, msg)
 	fn(msg, args...)
@@ -105,7 +78,7 @@ func (pConn *proxyConnection) run() {
 	pConn.logf(log.Tracef, "got connection to server %v->%v", serverConn.LocalAddr(), serverConn.RemoteAddr())
 	pConn.serverConn = serverConn
 	pConn.proxyAsClientAddr = serverConn.LocalAddr()
-	pConn.proxyAsClientAddrBytes = getAddrBytes(pConn.proxyAsClientAddr)
+	pConn.proxyAsClientAddrBytes = getProxyAsClientAddrBytes(pConn.proxyAsServerAddr, pConn.proxyAsClientAddr)
 
 	pConn.log(log.Debug, `starting client payload listener...`)
 	go pConn.handlePayloadsFromClient()
@@ -125,6 +98,35 @@ func (pConn *proxyConnection) run() {
 		pConn.logf(log.Tracef, `writing payload from server to chan <- "%s"`, hex.EncodeToString(payload))
 		pConn.payloadsFromServerChan <- payload
 	}
+}
+
+func getUDPAddrBytes(addr *net.UDPAddr) []byte {
+	return getIPPortBytes(addr.IP, addr.Port)
+}
+
+// Gets the byteslice representation of the address, with the port coming from
+// the address, but the IP coming from the first argument
+func getProxyAsClientAddrBytes(udpAddr *net.UDPAddr, addr net.Addr) []byte {
+	split := strings.Split(addr.String(), ":")
+	port, _ := strconv.Atoi(split[1])
+	ip := udpAddr.IP
+
+	return getIPPortBytes(ip, port)
+}
+
+// Get the byte sequence of the IP and port in the RakNet form, including the IP
+// version byte (set to 4 by default)
+func getIPPortBytes(ip net.IP, port int) []byte {
+	// Initialize ipv4 byteslice
+	addrBytes := []byte{ipv4}
+	portBytes := make([]byte, 2)
+	binary.BigEndian.PutUint16(portBytes, uint16(port))
+	for _, b := range ip.To4() {
+		addrBytes = append(addrBytes, ^b)
+	}
+	addrBytes = append(addrBytes, portBytes...)
+
+	return addrBytes
 }
 
 func (pConn *proxyConnection) handlePayloadsFromClient() {
