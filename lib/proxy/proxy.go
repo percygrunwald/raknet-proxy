@@ -21,12 +21,7 @@ type Proxy struct {
 type UDPPayload []byte
 
 const (
-	MaxUDPSize                      int  = 65535
-	packetOpenConnectionRequest2    byte = 7
-	packetOpenConnectionReply2      byte = 8
-	packetConnectionRequestAccepted byte = 10
-	packetNewIncomingConnection     byte = 13
-	ipv4                            byte = 4
+	MaxUDPSize int = 65535
 )
 
 var proxyConns = make(map[int]*proxyConnection)

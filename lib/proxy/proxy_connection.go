@@ -12,6 +12,14 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
+const (
+	packetOpenConnectionRequest2    byte = 7
+	packetOpenConnectionReply2      byte = 8
+	packetConnectionRequestAccepted byte = 10
+	packetNewIncomingConnection     byte = 13
+	ipv4                            byte = 4
+)
+
 type proxyConnection struct {
 	payloadsFromServerChan chan UDPPayload
 	payloadsFromClientChan chan UDPPayload
@@ -161,15 +169,19 @@ func (pConn *proxyConnection) proxyPayloadFromServer(payload UDPPayload) (int, e
 }
 
 func (pConn *proxyConnection) updatePayloadFromServer(payload UDPPayload) (UDPPayload, error) {
-	payload = bytes.ReplaceAll(payload, pConn.serverAddrBytes, pConn.proxyAsServerAddrBytes)
-	payload = bytes.ReplaceAll(payload, pConn.proxyAsClientAddrBytes, pConn.clientAddrBytes)
+	// Attempt the bare minimum changes to packets
+	// payload = bytes.ReplaceAll(payload, pConn.serverAddrBytes, pConn.proxyAsServerAddrBytes)
+	// payload = bytes.ReplaceAll(payload, pConn.proxyAsClientAddrBytes, pConn.clientAddrBytes)
 
 	return payload, nil
 }
 
 func (pConn *proxyConnection) updatePayloadFromClient(payload UDPPayload) (UDPPayload, error) {
+	// Attempt the bare minimum changes to packets
 	// payload = bytes.ReplaceAll(payload, pConn.clientAddrBytes, pConn.proxyAsClientAddrBytes)
-	payload = bytes.ReplaceAll(payload, pConn.proxyAsServerAddrBytes, pConn.serverAddrBytes)
+	if payload[0] == packetOpenConnectionRequest2 {
+		payload = bytes.ReplaceAll(payload, pConn.proxyAsServerAddrBytes, pConn.serverAddrBytes)
+	}
 
 	return payload, nil
 }
